@@ -1,17 +1,47 @@
 {
-  "name": "realtimetest",
+  "name": "realtime-observability",
   "version": "1.0.0",
+  "description": "Zero-config observability for OpenAI Realtime API WebRTC sessions",
   "type": "module",
-  "main": "index.js",
-  "scripts": {
-    "start": "node test.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "browser": "src/index.js",
+  "exports": {
+    ".": {
+      "import": "./src/index.js",
+      "browser": "./src/index.js"
+    }
   },
-  "keywords": [],
+  "files": [
+    "src/"
+  ],
+  "scripts": {
+    "start": "run-p start:*",
+    "start:server": "node test.js",
+    "start:langsmith": "sleep 1 && node src/langsmith-server.js",
+    "demo": "echo 'Run in two terminals:' && echo '  Terminal 1: npm run langsmith' && echo '  Terminal 2: npm start'"
+  },
+  "keywords": [
+    "openai",
+    "realtime",
+    "webrtc",
+    "observability",
+    "voice",
+    "speech",
+    "langsmith"
+  ],
   "author": "",
-  "license": "ISC",
-  "description": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anthropic/realtime-observability"
+  },
   "dependencies": {
+    "cors": "^2.8.5",
     "express": "^5.1.0"
-  }
+  },
+  "devDependencies": {
+    "npm-run-all2": "^8.0.4"
+  },
+  "peerDependencies": {}
 }

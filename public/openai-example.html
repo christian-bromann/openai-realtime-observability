@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OpenAI Realtime API - With LangSmith Observability</title>
+    <style>
+        body { font-family: system-ui; max-width: 600px; margin: 2rem auto; padding: 1rem; }
+        button { padding: 0.75rem 1.5rem; font-size: 1rem; cursor: pointer; margin-right: 0.5rem; }
+        #status { margin: 1rem 0; padding: 1rem; background: #f5f5f5; border-radius: 8px; }
+        .connected { background: #d4edda !important; }
+        #log { background: #1a1a2e; color: #0f0; padding: 1rem; height: 300px; overflow: auto; 
+               font-family: monospace; font-size: 12px; border-radius: 8px; margin-top: 1rem; }
+        .langsmith-badge { 
+            display: inline-block; background: linear-gradient(135deg, #3b82f6, #8b5cf6); 
+            color: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; 
+            margin-left: 0.5rem; vertical-align: middle;
+        }
+    </style>
+</head>
+<body>
+    <h1>OpenAI Realtime API <span class="langsmith-badge">🦜 LangSmith</span></h1>
+    <p>This example uses <strong>OpenAI's exact recommended code</strong> with LangSmith observability.</p>
+    <p style="font-size: 0.9rem; color: #666;">Audio and transcripts are saved to <code>./uploads/</code></p>
+    
+    <div id="status">Ready to connect</div>
+    <button id="connect">Connect</button>
+    <button id="disconnect" disabled>Disconnect</button>
+    
+    <pre id="log"></pre>
+
+    <!-- 
+    ============================================================
+    LANGSMITH: Import and enable (only change from OpenAI's example)
+    ============================================================
+    -->
+    <script type="module">
+        // Import observability SDK from LangSmith
+        import { enable, recordInput, getSessionAudio } from 'http://localhost:3001/sdk/index.js';
+
+        // Enable observability in non-production environments
+        // In production, simply don't call enable() and zero overhead is added
+        const IS_DEVELOPMENT = true; // or: !window.location.hostname.includes('prod')
+        
+        if (IS_DEVELOPMENT) {
+            enable({
+                debug: true,  // Log to console
+                endpoint: 'http://localhost:3001/observability',  // Send to LangSmith server
+                onEvent: (event) => {
+                    addLog(`📨 ${event.direction}: ${event.type}`);
+                    if (event.delta) addLog(`   "${event.delta}"`);
+                },
+                onAudio: (audio) => {
+                    addLog(`🎵 ${audio.direction}: ${audio.size} bytes`);
+                },
+                onSessionStart: (session) => {
+                    addLog(`🟢 Session: ${session.id}`);
+                },
+                onSessionEnd: (session) => {
+                    addLog(`🔴 Ended after ${session.duration}ms`);
+                    addLog(`   Events: ${session.eventCount}`);
+                    addLog(`   Transcript: "${session.transcript.output}"`);
+                    
+                    // Get audio for download/playback
+                    const audio = getSessionAudio();
+                    if (audio?.output) {
+                        addLog(`💾 Output audio ready: ${(audio.output.size/1024).toFixed(1)} KB`);
+                    }
+                }
+            });
+        }
+
+        // Logging helper
+        const log = document.getElementById('log');
+        const addLog = (msg) => {
+            log.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+            log.scrollTop = log.scrollHeight;
+        };
+
+        // ============================================================
+        // OPENAI'S EXACT RECOMMENDED CODE (unchanged!)
+        // From: https://platform.openai.com/docs/guides/realtime-webrtc
+        // ============================================================
+        
+        let pc = null;
+        let dc = null;
+        let audioElement = null;
+
+        document.getElementById('connect').onclick = async () => {
+            document.getElementById('connect').disabled = true;
+            document.getElementById('disconnect').disabled = false;
+            document.getElementById('status').textContent = 'Connecting...';
+
+            // Create a peer connection
+            pc = new RTCPeerConnection();
+
+            // Set up to play remote audio from the model
+            audioElement = document.createElement("audio");
+            audioElement.autoplay = true;
+            document.body.appendChild(audioElement);
+            pc.ontrack = (e) => (audioElement.srcObject = e.streams[0]);
+
+            // Add local audio track for microphone input in the browser
+            const ms = await navigator.mediaDevices.getUserMedia({
+                audio: true,
+            });
+            pc.addTrack(ms.getTracks()[0]);
+
+            // ⬇️ ONLY ADDITION: Record input audio (one line!)
+            recordInput(ms);
+
+            // Set up data channel for sending and receiving events
+            dc = pc.createDataChannel("oai-events");
+            
+            // Listen for server events
+            dc.addEventListener("message", (e) => {
+                const event = JSON.parse(e.data);
+                // Your app logic here...
+            });
+            
+            dc.addEventListener("open", () => {
+                document.getElementById('status').textContent = 'Connected!';
+                document.getElementById('status').classList.add('connected');
+            });
+
+            // Start the session using the Session Description Protocol (SDP)
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            const sdpResponse = await fetch("/session", {
+                method: "POST",
+                body: offer.sdp,
+                headers: {
+                    "Content-Type": "application/sdp",
+                },
+            });
+
+            const answer = {
+                type: "answer",
+                sdp: await sdpResponse.text(),
+            };
+
+            await pc.setRemoteDescription(answer);
+        };
+
+        document.getElementById('disconnect').onclick = () => {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            if (audioElement) {
+                audioElement.srcObject = null;
+                audioElement.remove();
+                audioElement = null;
+            }
+            document.getElementById('connect').disabled = false;
+            document.getElementById('disconnect').disabled = true;
+            document.getElementById('status').textContent = 'Disconnected';
+            document.getElementById('status').classList.remove('connected');
+        };
+    </script>
+</body>
+</html>
+

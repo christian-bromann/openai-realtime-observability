@@ -1,91 +1,239 @@
 # OpenAI Realtime API Observability
 
-A drop-in observability package for capturing data from OpenAI's Realtime API WebRTC sessions.
+Zero-config observability for OpenAI Realtime API WebRTC sessions, powered by LangSmith.
 
-## The Challenge
-
-OpenAI's Realtime API uses WebRTC for real-time voice conversations. The architecture looks like this:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         BROWSER                              │
-│                                                              │
-│   1. Create RTCPeerConnection                                │
-│   2. Get microphone access                                   │
-│   3. Create SDP offer                                        │
-│   4. POST offer to server → server forwards to OpenAI        │
-│   5. Receive SDP answer                                      │
-│   6. WebRTC connection established                           │
-│                                                              │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           │ WebRTC (direct peer-to-peer)
-                           │ • Audio via RTP
-                           │ • Events via DataChannel
-                           ▼
-              ┌─────────────────────────┐
-              │   OpenAI Realtime API   │
-              └─────────────────────────┘
-```
-
-**The problem**: The server only facilitates the initial SDP exchange. After that, all audio and data channel messages flow **directly** between the browser and OpenAI, bypassing your server entirely.
-
-## Solution
-
-We created `openai-realtime-observability.js` - a client-side package that intercepts:
-
-| Data Type | How It's Captured |
-|-----------|-------------------|
-| **SDP Signaling** | Wraps `fetch()` to capture offer/answer |
-| **Data Channel Events** | Wraps `RTCPeerConnection` to intercept `createDataChannel()` and message handlers |
-| **Input Audio** | Uses `MediaRecorder` on the microphone stream |
-| **Output Audio** | Uses `MediaRecorder` on the received audio track |
-| **Transcripts** | Extracted from `response.output_audio_transcript.delta` events |
+**Use OpenAI's exact example code** - just add one import and one line.
 
 ![Demo Screenshot](demo.png)
 
-## Usage
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           BROWSER                                        │
+│                                                                          │
+│   import { enable } from 'http://langsmith:3001/sdk/index.js'           │
+│                                                                          │
+└───────────────┬─────────────────────────────────┬───────────────────────┘
+                │                                 │
+                │ SDP Signaling                   │ SDK + Observability Data
+                │ POST /session                   │ POST /observability
+                ▼                                 ▼
+┌───────────────────────────────────┐   ┌───────────────────────────────────┐
+│  Your App Server (port 3000)      │   │  🦜 LangSmith Server (port 3001)  │
+│  ─────────────────────────────    │   │  ───────────────────────────────  │
+│  • Serves your web app            │   │  • Serves SDK at /sdk/index.js    │
+│  • Proxies SDP to OpenAI          │   │  • Receives events & audio        │
+│                                   │   │  • Saves sessions to ./uploads/   │
+│                                   │   │  • REST API for session data      │
+└───────────────────────────────────┘   └───────────────────────────────────┘
+```
+
+## Quick Start
+
+### 1. Start the LangSmith Server
+
+```bash
+npm install
+npm run langsmith
+```
+
+### 2. Start Your App Server
+
+```bash
+npm start
+```
+
+### 3. Open the Demo
+
+```
+http://localhost:3000/openai-example.html
+```
+
+## Integration
+
+Import the SDK from LangSmith and enable observability:
 
 ```javascript
-import { createRealtimeObserver } from './openai-realtime-observability.js';
+// Import SDK from LangSmith
+import { enable, recordInput } from 'http://localhost:3001/sdk/index.js';
 
-// 1. Create observer with callbacks
-const observer = createRealtimeObserver({
+// Enable observability (only in development!)
+if (process.env.NODE_ENV !== 'production') {
+    enable({
+        endpoint: 'http://localhost:3001/observability',
+        debug: true,
+    });
+}
+
+// Use OpenAI's exact example code - UNCHANGED!
+const pc = new RTCPeerConnection();
+
+const audioElement = document.createElement("audio");
+audioElement.autoplay = true;
+pc.ontrack = (e) => (audioElement.srcObject = e.streams[0]);
+
+const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
+pc.addTrack(ms.getTracks()[0]);
+
+// One extra line to record input audio
+recordInput(ms);
+
+const dc = pc.createDataChannel("oai-events");
+
+const offer = await pc.createOffer();
+await pc.setLocalDescription(offer);
+
+const sdpResponse = await fetch("/session", {
+    method: "POST",
+    body: offer.sdp,
+    headers: { "Content-Type": "application/sdp" },
+});
+
+await pc.setRemoteDescription({
+    type: "answer",
+    sdp: await sdpResponse.text(),
+});
+```
+
+## LangSmith Server
+
+### Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /sdk/index.js` | Observability SDK |
+| `POST /observability` | Receive observability data |
+| `GET /sessions` | List all sessions |
+| `GET /sessions/:id` | Get session details + events |
+| `GET /uploads/:sessionId/...` | Download audio files |
+| `GET /health` | Health check |
+
+### Output Structure
+
+```
+uploads/
+└── session_1764218930107_yl7tj5ys8/
+    ├── session.json              # Full session metadata + all events
+    ├── turn-01-input/
+    │   ├── audio.webm            # Your voice
+    │   └── meta.json
+    ├── turn-02-output/
+    │   ├── audio.webm            # AI response
+    │   ├── transcript.txt        # "Hey there! I'm doing great..."
+    │   └── meta.json
+    └── ...
+```
+
+### Console Output
+
+```
+═══════════════════════════════════════════════════════════
+  🦜 LangSmith Observability Server
+═══════════════════════════════════════════════════════════
+
+  🌐 Server:    http://localhost:3001
+  📦 SDK:       http://localhost:3001/sdk/index.js
+  📊 Sessions:  http://localhost:3001/sessions
+  📁 Uploads:   http://localhost:3001/uploads/
+
+[LangSmith] 📁 Session started: session_xxx
+[LangSmith] 🎤 Input turn 1 started
+[LangSmith] ✅ Turn 1 (input) saved
+[LangSmith] 🔊 Output turn 2 started
+[LangSmith] 📝 Transcript: "Hey there! I'm doing great..."
+[LangSmith] 🎵 Audio: 145.2 KB
+[LangSmith] ✅ Turn 2 (output) saved
+[LangSmith] 📊 Session ended: 47 events, 12340ms
+```
+
+## SDK API
+
+### `enable(options)`
+
+Enable observability. **Call before creating any RTCPeerConnection.**
+
+```javascript
+enable({
+    // Required: LangSmith observability endpoint
+    endpoint: 'http://localhost:3001/observability',
+    
+    // Log to console (default: false)
+    debug: true,
+    
+    // Optional callbacks for custom handling
     onEvent: (event) => {
-        console.log(`${event.direction}: ${event.type}`);
-        // e.g. "incoming: response.output_audio_transcript.delta"
+        console.log(event.direction, event.type);
     },
+    
     onAudio: (audio) => {
-        console.log(`${audio.direction} audio: ${audio.size} bytes`);
-        // audio.blob contains the raw Blob for local playback
-        // audio.data contains base64 for remote transmission
+        console.log(audio.direction, audio.size);
     },
-    onSessionStart: (session) => console.log('Session:', session.id),
+    
+    onSessionStart: (session) => {
+        console.log('Started:', session.id);
+    },
+    
     onSessionEnd: (session) => {
         console.log('Duration:', session.duration);
         console.log('Transcript:', session.transcript.output);
     },
-    onSignaling: (sig) => console.log(`SDP ${sig.type}`),
+    
+    // Disable audio recording (default: true)
+    recordAudio: false,
 });
-
-// 2. Wrap RTCPeerConnection
-const pc = observer.wrapPeerConnection(new RTCPeerConnection());
-
-// 3. Use observer.fetch for the SDP exchange
-const response = await observer.fetch('/session', {
-    method: 'POST',
-    body: offer.sdp,
-    headers: { 'Content-Type': 'application/sdp' },
-});
-
-// 4. Record microphone audio
-const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-observer.startInputAudioRecording(mic);
 ```
+
+### `disable()`
+
+Disable observability and restore original APIs.
+
+### `recordInput(stream)`
+
+Record microphone audio. Call after `getUserMedia()`.
+
+```javascript
+const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
+recordInput(ms);
+```
+
+### `getSessionAudio()`
+
+Get recorded audio blobs for local download/playback.
+
+### `isActive()`
+
+Check if observability is enabled.
+
+## Production Safety
+
+**No code runs unless you explicitly enable it:**
+
+```javascript
+// Only enable in development
+if (process.env.NODE_ENV !== 'production') {
+    enable({ endpoint: 'http://langsmith:3001/observability' });
+}
+```
+
+When `enable()` is not called:
+- Zero overhead - original APIs untouched
+- Zero network requests
+- Zero memory usage
+
+## What Gets Captured
+
+| Data | How |
+|------|-----|
+| **SDP Signaling** | Intercepts `fetch()` calls with SDP content |
+| **All Events** | Wraps `RTCDataChannel.send()` and `onmessage` |
+| **Input Audio** | `MediaRecorder` on microphone stream |
+| **Output Audio** | `MediaRecorder` on received audio track |
+| **Transcripts** | Extracted from `response.output_audio_transcript.delta` |
 
 ## Events Captured
 
-The data channel carries all these events from OpenAI:
+All OpenAI Realtime API events:
 
 ```
 session.created
@@ -94,82 +242,36 @@ input_audio_buffer.speech_started
 input_audio_buffer.speech_stopped
 input_audio_buffer.committed
 conversation.item.added
-conversation.item.done
 response.created
-response.output_item.added
-response.content_part.added
-response.output_audio_transcript.delta  (contains transcript text)
+response.output_audio_transcript.delta
 output_audio_buffer.started
-response.output_audio.done
-response.output_audio_transcript.done
-response.content_part.done
-response.output_item.done
+output_audio_buffer.stopped
 response.done
 rate_limits.updated
-output_audio_buffer.stopped
+...
 ```
-
-## Audio Recording Gotchas
-
-### WebM Header Requirement
-
-MediaRecorder produces WebM chunks where:
-- **Chunk 0**: Contains EBML header + segment info (required for playback)
-- **Chunks 1+**: Just cluster data (continuation)
-
-If you want to save audio per-turn (not full session), you **must include chunk 0** in every file, otherwise the WebM won't be playable.
-
-```javascript
-// Wrong - missing header, won't play
-const turnBlob = new Blob(chunks.slice(turnStartIndex), { type: 'audio/webm' });
-
-// Correct - prepend chunk 0 for header
-const turnBlob = new Blob([chunks[0], ...chunks.slice(turnStartIndex)], { type: 'audio/webm' });
-```
-
-### Turn Boundary Timing
-
-Audio chunks from MediaRecorder don't align perfectly with data channel events. Audio often arrives **before** the corresponding event:
-
-```
-🎵 output audio: 386 bytes      ← Audio arrives first
-📨 output_audio_buffer.started   ← Event arrives after
-```
-
-Solution: Track the chunk index when a turn starts, then at turn end, slice all chunks from that index.
 
 ## Files
 
-- `public/openai-realtime-observability.js` - The observability package
-- `public/example-usage.html` - Full working example with turn-based audio recording
-- `public/index.html` - Original Realtime API demo (without observability)
-- `test.js` - Express server that proxies SDP to OpenAI
+```
+├── src/
+│   ├── index.js              # Observability SDK (served by LangSmith)
+│   └── langsmith-server.js   # LangSmith server
+├── public/
+│   ├── openai-example.html   # Demo with LangSmith integration
+│   └── index.html            # Original OpenAI demo
+├── uploads/                  # Session data (created by LangSmith)
+├── test.js                   # Demo app server
+└── package.json
+```
 
-## Running
+## Scripts
 
 ```bash
-npm install
-npm start
-# Open http://localhost:3000/example-usage.html
+npm run langsmith  # Start LangSmith server (port 3001)
+npm start          # Start demo app server (port 3000)
 ```
 
-## Alternative: Webhook Observer
+## License
 
-Send all data to your backend:
-
-```javascript
-import { createWebhookObserver } from './openai-realtime-observability.js';
-
-const observer = createWebhookObserver('https://your-api.com/observability', {
-    sendAudioToWebhook: false, // Skip large audio data
-});
-```
-
-## What We Learned
-
-1. **WebRTC is peer-to-peer** - Your server only sees the SDP exchange, not the actual media/data
-2. **Must intercept on the client** - Wrap `RTCPeerConnection` and `fetch` before the connection is established
-3. **MediaRecorder chunk structure matters** - First chunk has headers, must be included for playback
-4. **Event timing is asynchronous** - Audio chunks and data channel events don't arrive in sync
-5. **Use `addEventListener` not `onX`** - Properties like `pc.ontrack` can be overwritten, but `addEventListener` persists
-
+MIT
