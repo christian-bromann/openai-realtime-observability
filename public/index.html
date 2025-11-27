@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAI Realtime API Test</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@300;500;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-deep: #0a0a0f;
+            --bg-surface: #12121a;
+            --bg-elevated: #1a1a26;
+            --accent-primary: #00ffa3;
+            --accent-glow: rgba(0, 255, 163, 0.15);
+            --accent-secondary: #ff6b6b;
+            --text-primary: #e8e8ed;
+            --text-muted: #6b6b7a;
+            --border-subtle: rgba(255, 255, 255, 0.06);
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            background-image: 
+                radial-gradient(ellipse 80% 50% at 50% -20%, var(--accent-glow), transparent),
+                linear-gradient(180deg, var(--bg-deep) 0%, #0d0d14 100%);
+        }
+
+        .container {
+            max-width: 480px;
+            width: 100%;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-primary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            font-weight: 300;
+        }
+
+        .card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: 20px;
+            padding: 2.5rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
+            opacity: 0.4;
+        }
+
+        .visualizer-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 120px;
+            margin-bottom: 2rem;
+        }
+
+        .visualizer {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            height: 80px;
+        }
+
+        .bar {
+            width: 4px;
+            background: var(--accent-primary);
+            border-radius: 4px;
+            height: 20px;
+            transition: height 0.1s ease;
+            box-shadow: 0 0 12px var(--accent-primary);
+        }
+
+        .bar.active {
+            animation: pulse 0.15s ease infinite alternate;
+        }
+
+        @keyframes pulse {
+            from { opacity: 0.6; }
+            to { opacity: 1; }
+        }
+
+        .status {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .status-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.6rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            padding: 0.5rem 1rem;
+            background: var(--bg-elevated);
+            border-radius: 50px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            transition: all 0.3s ease;
+        }
+
+        .status-dot.connected {
+            background: var(--accent-primary);
+            box-shadow: 0 0 12px var(--accent-primary);
+        }
+
+        .status-dot.error {
+            background: var(--accent-secondary);
+            box-shadow: 0 0 12px var(--accent-secondary);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 1rem 2rem;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .btn-primary {
+            background: var(--accent-primary);
+            color: var(--bg-deep);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(0, 255, 163, 0.3);
+        }
+
+        .btn-danger {
+            background: transparent;
+            color: var(--accent-secondary);
+            border: 2px solid var(--accent-secondary);
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: var(--accent-secondary);
+            color: var(--bg-deep);
+        }
+
+        .btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .events-log {
+            margin-top: 2rem;
+            background: var(--bg-elevated);
+            border-radius: 12px;
+            padding: 1rem;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+        }
+
+        .events-log::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .events-log::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .events-log::-webkit-scrollbar-thumb {
+            background: var(--border-subtle);
+            border-radius: 3px;
+        }
+
+        .event {
+            padding: 0.4rem 0;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text-muted);
+        }
+
+        .event:last-child {
+            border-bottom: none;
+        }
+
+        .event.incoming {
+            color: var(--accent-primary);
+        }
+
+        .event.outgoing {
+            color: #7c9cff;
+        }
+
+        .event.error {
+            color: var(--accent-secondary);
+        }
+
+        footer {
+            margin-top: 2rem;
+            text-align: center;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Realtime Voice</h1>
+            <p class="subtitle">OpenAI Realtime API Test</p>
+        </header>
+
+        <div class="card">
+            <div class="visualizer-container">
+                <div class="visualizer" id="visualizer">
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                </div>
+            </div>
+
+            <div class="status">
+                <div class="status-indicator">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span id="statusText">Ready to connect</span>
+                </div>
+            </div>
+
+            <button class="btn btn-primary" id="connectBtn">Start Session</button>
+
+            <div class="events-log" id="eventsLog" style="display: none;"></div>
+        </div>
+
+        <footer>
+            Press the button and start talking
+        </footer>
+    </div>
+
+    <script>
+        let pc = null;
+        let dc = null;
+        let audioElement = null;
+        let audioContext = null;
+        let analyser = null;
+        let animationId = null;
+
+        const connectBtn = document.getElementById('connectBtn');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const eventsLog = document.getElementById('eventsLog');
+        const visualizer = document.getElementById('visualizer');
+        const bars = visualizer.querySelectorAll('.bar');
+
+        function logEvent(message, type = 'info') {
+            eventsLog.style.display = 'block';
+            const event = document.createElement('div');
+            event.className = `event ${type}`;
+            event.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            eventsLog.appendChild(event);
+            eventsLog.scrollTop = eventsLog.scrollHeight;
+        }
+
+        function setStatus(text, state = 'idle') {
+            statusText.textContent = text;
+            statusDot.className = 'status-dot';
+            if (state === 'connected') statusDot.classList.add('connected');
+            if (state === 'error') statusDot.classList.add('error');
+        }
+
+        function updateVisualizer(dataArray) {
+            if (!dataArray) {
+                bars.forEach(bar => {
+                    bar.style.height = '20px';
+                    bar.classList.remove('active');
+                });
+                return;
+            }
+
+            const step = Math.floor(dataArray.length / bars.length);
+            bars.forEach((bar, i) => {
+                const value = dataArray[i * step];
+                const height = Math.max(8, (value / 255) * 80);
+                bar.style.height = `${height}px`;
+                bar.classList.toggle('active', value > 50);
+            });
+        }
+
+        function visualizeAudio(stream) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+
+            const source = audioContext.createMediaStreamSource(stream);
+            source.connect(analyser);
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+            function draw() {
+                animationId = requestAnimationFrame(draw);
+                analyser.getByteFrequencyData(dataArray);
+                updateVisualizer(dataArray);
+            }
+            draw();
+        }
+
+        async function startSession() {
+            try {
+                setStatus('Connecting...', 'idle');
+                logEvent('Creating peer connection...');
+
+                // Create a peer connection
+                pc = new RTCPeerConnection();
+
+                // Set up to play remote audio from the model
+                audioElement = document.createElement('audio');
+                audioElement.autoplay = true;
+                pc.ontrack = (e) => {
+                    logEvent('Received audio track from model', 'incoming');
+                    audioElement.srcObject = e.streams[0];
+                };
+
+                // Add local audio track for microphone input
+                logEvent('Requesting microphone access...');
+                const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
+                pc.addTrack(ms.getTracks()[0]);
+                logEvent('Microphone connected', 'outgoing');
+
+                // Visualize input audio
+                visualizeAudio(ms);
+
+                // Set up data channel for sending and receiving events
+                dc = pc.createDataChannel('oai-events');
+                dc.onopen = () => {
+                    logEvent('Data channel opened', 'incoming');
+                    setStatus('Connected', 'connected');
+                    connectBtn.textContent = 'End Session';
+                    connectBtn.className = 'btn btn-danger';
+                };
+                dc.onclose = () => {
+                    logEvent('Data channel closed');
+                };
+                dc.onmessage = (e) => {
+                    try {
+                        const event = JSON.parse(e.data);
+                        logEvent(`Event: ${event.type}`, 'incoming');
+                    } catch {
+                        logEvent(`Message: ${e.data.substring(0, 50)}...`, 'incoming');
+                    }
+                };
+
+                // Start the session using SDP
+                logEvent('Creating offer...');
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                logEvent('Sending SDP to server...');
+                const sdpResponse = await fetch('/session', {
+                    method: 'POST',
+                    body: offer.sdp,
+                    headers: {
+                        'Content-Type': 'application/sdp',
+                    },
+                });
+
+                if (!sdpResponse.ok) {
+                    throw new Error(`Server error: ${sdpResponse.status}`);
+                }
+
+                const answer = {
+                    type: 'answer',
+                    sdp: await sdpResponse.text(),
+                };
+
+                logEvent('Received SDP answer', 'incoming');
+                await pc.setRemoteDescription(answer);
+                logEvent('Session established!', 'incoming');
+
+            } catch (error) {
+                console.error('Error:', error);
+                setStatus('Connection failed', 'error');
+                logEvent(`Error: ${error.message}`, 'error');
+                cleanup();
+            }
+        }
+
+        function cleanup() {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            if (dc) {
+                dc.close();
+                dc = null;
+            }
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            if (audioElement) {
+                audioElement.srcObject = null;
+                audioElement = null;
+            }
+            updateVisualizer(null);
+            connectBtn.textContent = 'Start Session';
+            connectBtn.className = 'btn btn-primary';
+            setStatus('Ready to connect', 'idle');
+        }
+
+        connectBtn.addEventListener('click', () => {
+            if (pc) {
+                logEvent('Ending session...');
+                cleanup();
+            } else {
+                startSession();
+            }
+        });
+    </script>
+</body>
+</html>
+

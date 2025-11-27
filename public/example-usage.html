@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Example: Using the Observability Package</title>
+    <style>
+        body { font-family: system-ui, sans-serif; padding: 1rem; background: #1a1a2e; color: #eee; }
+        h1 { color: #00ffa3; }
+        button { padding: 0.5rem 1rem; margin-right: 0.5rem; cursor: pointer; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        #log { background:#111; color:#0f0; padding:1rem; height:300px; overflow:auto; font-family: monospace; font-size: 12px; }
+        #turns { margin-top: 1rem; }
+        .turn { background: #222; padding: 1rem; margin: 0.5rem 0; border-radius: 8px; border-left: 4px solid #00ffa3; }
+        .turn.input { border-left-color: #ff6b6b; }
+        .turn audio { width: 100%; margin-top: 0.5rem; }
+        .turn-header { display: flex; justify-content: space-between; align-items: center; }
+        .turn-info { font-size: 12px; color: #888; }
+        .download-btn { background: #00ffa3; color: #000; border: none; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>OpenAI Realtime with Observability</h1>
+    <button id="start">Start Session</button>
+    <button id="stop" disabled>Stop Session</button>
+    <button id="downloadAll" disabled>Download All Audio</button>
+    <pre id="log"></pre>
+    <div id="turns"><h3>Conversation Turns</h3></div>
+
+    <script type="module">
+        import { createRealtimeObserver } from './openai-realtime-observability.js';
+
+        const log = document.getElementById('log');
+        const turnsDiv = document.getElementById('turns');
+        const addLog = (msg) => {
+            log.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+            log.scrollTop = log.scrollHeight;
+        };
+
+        // =============================================
+        // AUDIO STORAGE (track indices in session arrays)
+        // =============================================
+        let turns = [];
+        let currentInputTurn = null;
+        let currentOutputTurn = null;
+        let turnCounter = 0;
+        
+        // Store ALL audio for entire session
+        let allInputBlobs = [];
+        let allOutputBlobs = [];
+        
+        // Track where each turn starts in the session arrays
+        let inputTurnStartIndex = 0;
+        let outputTurnStartIndex = 0;
+
+        function startInputTurn() {
+            turnCounter++;
+            // Mark where this turn's audio starts in the session array
+            inputTurnStartIndex = allInputBlobs.length;
+            currentInputTurn = {
+                id: turnCounter,
+                type: 'input',
+                startedAt: new Date().toISOString(),
+                chunkCount: 0,
+                transcript: ''
+            };
+            addLog(`🎤 Turn ${turnCounter} (input) started at chunk ${inputTurnStartIndex}`);
+        }
+
+        function endInputTurn(transcript = '') {
+            if (currentInputTurn) {
+                currentInputTurn.endedAt = new Date().toISOString();
+                currentInputTurn.transcript = transcript;
+                
+                // Get all chunks from turn start to now
+                const turnChunks = allInputBlobs.slice(inputTurnStartIndex);
+                
+                // WebM needs the header from chunk 0 to be playable
+                // If turn doesn't start at 0, prepend chunk 0 (contains EBML header)
+                let blobParts = turnChunks;
+                if (inputTurnStartIndex > 0 && allInputBlobs.length > 0 && turnChunks.length > 0) {
+                    blobParts = [allInputBlobs[0], ...turnChunks];
+                }
+                
+                currentInputTurn.audioBlob = blobParts.length > 0 
+                    ? new Blob(blobParts, { type: 'audio/webm;codecs=opus' })
+                    : null;
+                currentInputTurn.chunkCount = turnChunks.length;
+                turns.push(currentInputTurn);
+                createTurnUI(currentInputTurn);
+                addLog(`🎤 Turn ${currentInputTurn.id} (input) ended - ${turnChunks.length} chunks`);
+                currentInputTurn = null;
+            }
+        }
+
+        function startOutputTurn() {
+            turnCounter++;
+            // Mark where this turn's audio starts in the session array
+            outputTurnStartIndex = allOutputBlobs.length;
+            currentOutputTurn = {
+                id: turnCounter,
+                type: 'output',
+                startedAt: new Date().toISOString(),
+                chunkCount: 0,
+                transcript: ''
+            };
+            addLog(`🔊 Turn ${turnCounter} (output) started at chunk ${outputTurnStartIndex}`);
+        }
+
+        function endOutputTurn(transcript = '') {
+            if (currentOutputTurn) {
+                currentOutputTurn.endedAt = new Date().toISOString();
+                currentOutputTurn.transcript = transcript;
+                
+                // Get all chunks from turn start to now
+                const turnChunks = allOutputBlobs.slice(outputTurnStartIndex);
+                
+                // WebM needs the header from chunk 0 to be playable
+                // If turn doesn't start at 0, prepend chunk 0 (contains EBML header)
+                let blobParts = turnChunks;
+                if (outputTurnStartIndex > 0 && allOutputBlobs.length > 0 && turnChunks.length > 0) {
+                    blobParts = [allOutputBlobs[0], ...turnChunks];
+                }
+                
+                currentOutputTurn.audioBlob = blobParts.length > 0
+                    ? new Blob(blobParts, { type: 'audio/webm;codecs=opus' })
+                    : null;
+                currentOutputTurn.chunkCount = turnChunks.length;
+                turns.push(currentOutputTurn);
+                createTurnUI(currentOutputTurn);
+                addLog(`🔊 Turn ${currentOutputTurn.id} (output) ended - ${turnChunks.length} chunks`);
+                currentOutputTurn = null;
+            }
+        }
+
+        function createTurnUI(turn) {
+            const div = document.createElement('div');
+            div.className = `turn ${turn.type}`;
+            div.id = `turn-${turn.id}`;
+            
+            const audioUrl = turn.audioBlob ? URL.createObjectURL(turn.audioBlob) : null;
+            const sizeKB = turn.audioBlob ? (turn.audioBlob.size / 1024).toFixed(1) : 0;
+            
+            div.innerHTML = `
+                <div class="turn-header">
+                    <strong>${turn.type === 'input' ? '🎤 You' : '🤖 AI'} (Turn ${turn.id})</strong>
+                    ${audioUrl ? `<button class="download-btn" onclick="downloadTurn(${turn.id})">💾 Download (${sizeKB} KB)</button>` : ''}
+                </div>
+                <div class="turn-info">${turn.chunkCount} audio chunks</div>
+                ${turn.transcript ? `<div style="margin-top:0.5rem; font-style:italic;">"${turn.transcript}"</div>` : ''}
+                ${audioUrl ? `<audio controls src="${audioUrl}"></audio>` : '<div class="turn-info">No audio captured</div>'}
+            `;
+            
+            turnsDiv.appendChild(div);
+            document.getElementById('downloadAll').disabled = false;
+        }
+
+        // Global download function
+        window.downloadTurn = (turnId) => {
+            const turn = turns.find(t => t.id === turnId);
+            if (!turn || !turn.audioBlob) return;
+            
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(turn.audioBlob);
+            a.download = `turn-${turn.id}-${turn.type}.webm`;
+            a.click();
+        };
+
+        document.getElementById('downloadAll').onclick = () => {
+            turns.forEach(turn => {
+                if (turn.audioBlob) {
+                    window.downloadTurn(turn.id);
+                }
+            });
+        };
+
+        function createSessionAudioUI() {
+            // Create full session audio blobs
+            const fullInputBlob = allInputBlobs.length > 0 
+                ? new Blob(allInputBlobs, { type: 'audio/webm;codecs=opus' }) 
+                : null;
+            const fullOutputBlob = allOutputBlobs.length > 0 
+                ? new Blob(allOutputBlobs, { type: 'audio/webm;codecs=opus' }) 
+                : null;
+            
+            const div = document.createElement('div');
+            div.style.cssText = 'background:#1a3a1a; padding:1rem; margin:1rem 0; border-radius:8px; border:2px solid #00ffa3;';
+            div.innerHTML = '<h4 style="margin:0 0 1rem 0; color:#00ffa3;">📼 Full Session Audio</h4>';
+            
+            if (fullInputBlob) {
+                const inputUrl = URL.createObjectURL(fullInputBlob);
+                const inputSize = (fullInputBlob.size / 1024).toFixed(1);
+                div.innerHTML += `
+                    <div style="margin-bottom:1rem;">
+                        <strong>🎤 Your Audio (${inputSize} KB, ${allInputBlobs.length} chunks)</strong>
+                        <button class="download-btn" onclick="downloadBlob('${inputUrl}', 'full-session-input.webm')">💾 Download</button>
+                        <audio controls src="${inputUrl}" style="width:100%; margin-top:0.5rem;"></audio>
+                    </div>
+                `;
+            }
+            
+            if (fullOutputBlob) {
+                const outputUrl = URL.createObjectURL(fullOutputBlob);
+                const outputSize = (fullOutputBlob.size / 1024).toFixed(1);
+                div.innerHTML += `
+                    <div>
+                        <strong>🤖 AI Audio (${outputSize} KB, ${allOutputBlobs.length} chunks)</strong>
+                        <button class="download-btn" onclick="downloadBlob('${outputUrl}', 'full-session-output.webm')">💾 Download</button>
+                        <audio controls src="${outputUrl}" style="width:100%; margin-top:0.5rem;"></audio>
+                    </div>
+                `;
+            }
+            
+            turnsDiv.insertBefore(div, turnsDiv.firstChild.nextSibling);
+        }
+
+        window.downloadBlob = (url, filename) => {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+        };
+
+        // =============================================
+        // OBSERVER WITH TURN TRACKING
+        // Use audio buffer events (not response events) for accurate timing
+        // =============================================
+        let currentOutputTranscript = '';
+        
+        const observer = createRealtimeObserver({
+            onEvent: (event) => {
+                addLog(`📨 ${event.direction}: ${event.type}`);
+                
+                // Track INPUT turns: speech_started -> speech_stopped
+                if (event.type === 'input_audio_buffer.speech_started') {
+                    // End any existing input turn first
+                    if (currentInputTurn) endInputTurn();
+                    startInputTurn();
+                }
+                if (event.type === 'input_audio_buffer.speech_stopped') {
+                    endInputTurn();
+                }
+                
+                // Track OUTPUT turns: output_audio_buffer.started -> output_audio_buffer.stopped
+                // These events align with actual audio streaming, not logical response boundaries
+                if (event.type === 'output_audio_buffer.started') {
+                    // End any existing output turn first
+                    if (currentOutputTurn) endOutputTurn(currentOutputTranscript);
+                    currentOutputTranscript = '';
+                    startOutputTurn();
+                }
+                if (event.type === 'output_audio_buffer.stopped') {
+                    endOutputTurn(currentOutputTranscript);
+                }
+                
+                // Collect transcript
+                if (event.type === 'response.output_audio_transcript.delta' && event.delta) {
+                    currentOutputTranscript += event.delta;
+                    addLog(`   "${event.delta}"`);
+                }
+            },
+            onAudio: (audio) => {
+                addLog(`🎵 ${audio.direction} audio: ${audio.size} bytes`);
+                
+                // Just add to session arrays - turns will slice what they need
+                if (audio.blob) {
+                    if (audio.direction === 'input') {
+                        allInputBlobs.push(audio.blob);
+                    }
+                    if (audio.direction === 'output') {
+                        allOutputBlobs.push(audio.blob);
+                    }
+                }
+            },
+            onSessionStart: (session) => {
+                addLog(`🟢 Session started: ${session.id}`);
+                turns = [];
+                turnCounter = 0;
+                allInputBlobs = [];
+                allOutputBlobs = [];
+                // Clear previous turns UI
+                turnsDiv.innerHTML = '<h3>Conversation Turns</h3>';
+            },
+            onSessionEnd: (session) => {
+                addLog(`🔴 Session ended after ${session.duration}ms`);
+                addLog(`   Total events: ${session.eventCount}`);
+                
+                // End any open turns
+                if (currentInputTurn) endInputTurn();
+                if (currentOutputTurn) endOutputTurn(currentOutputTranscript);
+                
+                addLog(`   Total turns: ${turns.length}`);
+                addLog(`   Total input chunks: ${allInputBlobs.length}`);
+                addLog(`   Total output chunks: ${allOutputBlobs.length}`);
+                
+                // Create full session audio downloads
+                createSessionAudioUI();
+            },
+            onSignaling: (sig) => {
+                addLog(`📡 SDP ${sig.type} captured (${sig.sdp?.length || 0} chars)`);
+            },
+        });
+
+        // =============================================
+        // OPTION 2: Send everything to your webhook
+        // =============================================
+        // const observer = createWebhookObserver('https://your-server.com/observability', {
+        //     sendAudioToWebhook: false, // Skip audio data (large)
+        // });
+
+        let pc = null;
+        let dc = null;
+
+        document.getElementById('start').onclick = async () => {
+            document.getElementById('start').disabled = true;
+            document.getElementById('stop').disabled = false;
+
+            // Create and WRAP the peer connection
+            pc = observer.wrapPeerConnection(new RTCPeerConnection());
+
+            // Audio setup - MUST append to DOM for autoplay to work
+            const audioEl = document.createElement('audio');
+            audioEl.autoplay = true;
+            document.body.appendChild(audioEl);
+            
+            pc.ontrack = (e) => {
+                addLog('🔊 Received audio track from model');
+                audioEl.srcObject = e.streams[0];
+            };
+
+            // Get microphone
+            const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+            pc.addTrack(mic.getTracks()[0]);
+            
+            // Start recording input audio
+            observer.startInputAudioRecording(mic);
+
+            // Create data channel (automatically wrapped)
+            dc = pc.createDataChannel('oai-events');
+            dc.onopen = () => addLog('✅ Data channel opened');
+            dc.onerror = (e) => addLog(`❌ Data channel error: ${e.error?.message || 'unknown'}`);
+            dc.onclose = () => addLog('Data channel closed');
+            dc.onmessage = (e) => {
+                // Your normal handler - events are already captured by observer
+                // const event = JSON.parse(e.data);
+                // ... your app logic
+            };
+            
+            // Monitor connection state
+            pc.onconnectionstatechange = () => {
+                addLog(`Connection state: ${pc.connectionState}`);
+            };
+            pc.oniceconnectionstatechange = () => {
+                addLog(`ICE state: ${pc.iceConnectionState}`);
+            };
+
+            // Create SDP offer
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            // Use observer.fetch instead of regular fetch
+            const response = await observer.fetch('/session', {
+                method: 'POST',
+                body: offer.sdp,
+                headers: { 'Content-Type': 'application/sdp' },
+            });
+
+            const answerSdp = await response.text();
+            await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+            
+            addLog('Connected!');
+        };
+
+        document.getElementById('stop').onclick = () => {
+            if (pc) {
+                pc.close(); // This triggers endSession automatically
+                pc = null;
+            }
+            document.getElementById('start').disabled = false;
+            document.getElementById('stop').disabled = true;
+        };
+    </script>
+</body>
+</html>
+
