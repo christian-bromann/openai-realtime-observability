@@ -38,10 +38,11 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^5.1.0"
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "langsmith": "^0.3.82"
   },
   "devDependencies": {
     "npm-run-all2": "^8.0.4"
-  },
-  "peerDependencies": {}
+  }
 }

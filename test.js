@@ -36,6 +36,7 @@ const sessionConfig = JSON.stringify({
     type: "realtime",
     model: "gpt-realtime",
     audio: { output: { voice: "marin" } },
+    // input_audio_transcription: { model: "gpt-4o-transcribe" },
 });
 
 app.post("/session", async (req, res) => {

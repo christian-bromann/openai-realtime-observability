@@ -113,7 +113,10 @@
             // Listen for server events
             dc.addEventListener("message", (e) => {
                 const event = JSON.parse(e.data);
-                // Your app logic here...
+                // Log errors in detail
+                if (event.type === 'error') {
+                    addLog(`❌ Error: ${JSON.stringify(event.error || event, null, 2)}`);
+                }
             });
             
             dc.addEventListener("open", () => {
